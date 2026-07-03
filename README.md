@@ -29,7 +29,7 @@ the `ollama` package. That's it.
 | `ModelRouter._classify_task_capability` / `_classify_task_complexity` — regex over free text, e.g. any task description containing "hi" anywhere routes to the cheap/fast tier | `router.py::Router.fallback_chain(tier)` — caller states the tier | The caller (an agent definition) always knows what kind of work it's doing; it's the one writing the prompt. Guessing that back out of natural language is unnecessary and provably brittle. |
 | `src/tools/dispatcher.py` + `src/capabilities/{contracts,registry,service}.py` (4 files) | `tools.py::ToolRegistry` (1 file, ~90 lines) | Ollama's `/api/chat` speaks OpenAI-style tool schemas natively (verified live — `tool_calls` come back structured, no custom parsing needed). A registry that derives the JSON schema from a function's type hints and dispatches by name is the whole job. |
 | `src/memory/{memory_graph,graph_store}.py` + `src/services/{vector_index,embed_quota,embedder}.py` + optional Memori triple store | `memory.py::Memory` (1 file, SQLite + cosine similarity) | The embedding model is just another Ollama model (`nomic-embed-text`, verified live — 768-dim vectors). At single-swarm scale, brute-force cosine over a SQLite table is correct and needs no vector DB. |
-| `sdlc_phase.py` + `phase_controller.py` + `phase_store.py` + `workflow_graphs.py` (4 files, optional LangGraph dependency) | `orchestrator.py::Swarm` (1 file, plain control flow) | The actual invariant — bounded rework, explicit history — is a three-step loop with a retry counter. It doesn't need a graph execution engine. |
+| `sdlc_phase.py` + `phase_controller.py` + `phase_store.py` + `workflow_graphs.py` (4 files, optional LangGraph dependency) | `orchestrator.py::Swarm` (1 file, plain control flow) | The actual invariant — bounded rework, explicit history — is a six-phase loop with two retry counters. It doesn't need a graph execution engine. |
 | Every agent file: conditional `google.adk.agents.Agent` import gated by `Config.TEST_MODE`, i.e. two agents per agent (real + mock) | `agents.py::Agent` (plain dataclass) + `run_agent()` | No ADK dependency, so no split. Tests substitute a duck-typed fake backend instead of a parallel mock agent implementation. |
 
 ## Architecture
@@ -77,8 +77,11 @@ Builder can get real filesystem/shell/git capability — `read_file`, `write_fil
 `list_dir`, `run_shell`, `git_diff`, `git_commit` — but only when explicitly enabled:
 
 ```bash
-OLLAMA_SWARM_ENABLE_DEV_TOOLS=1 python examples/run_demo.py
+OLLAMA_SWARM_ENABLE_DEV_TOOLS=1 python -m ollama_swarm.cli "your goal"
 ```
+
+(`examples/run_demo.py` sets this flag itself — its whole point is demonstrating the
+tools — so it needs no env var; the CLI defaults to tools off.)
 
 All of these are confined to `Settings.workspace_root` (default `./workspace`, override
 with `OLLAMA_SWARM_WORKSPACE`); path traversal out of the workspace raises. **Caveat:**
@@ -95,11 +98,21 @@ cloud account — not mocked:
 - Chat completion via `kimi-k2.6:cloud` (`ollama.Client(host="http://localhost:11434")`)
 - Native tool-calling (`tools=[...]` → structured `tool_calls` in the response)
 - Embeddings via `nomic-embed-text` (pulled locally, 768-dim vectors)
-- The full `Swarm` (Planner → Builder → Critic) end-to-end on a real goal — see
-  `examples/run_demo.py` output in the session transcript: approved on the first pass,
-  routed Planner/Critic to `glm-5:cloud` and Builder to `qwen3-coder-next:cloud`
-  per `config.MODEL_CATALOG`, no local pull needed for either (cloud models
-  resolve on first use).
+- The full six-phase `Swarm` end-to-end with dev tools enabled: the Builder really
+  wrote a file into `./workspace`, executed it with `run_shell`, and git-committed
+  it; the Critic approved on tool-execution evidence; the Governor ran real quality
+  gates and issued `GOVERN: GO`; FinOps summarized the run's token ledger. Routed
+  Planner/Architect/Critic/Governor to `glm-5:cloud`, Builder to
+  `qwen3-coder-next:cloud`, FinOps to `qwen3.5:cloud` per `config.MODEL_CATALOG`,
+  with no local pull needed (cloud models resolve on first use).
+- The catalog itself was probed live: `ministral-3`, `nemotron-3-nano`, and
+  `gemini-3-flash` 404 on Ollama Cloud despite appearing in GADK's model list, so
+  the FAST tier points at `qwen3.5`/`gemma4`, which resolve.
+
+Two real bugs surfaced only in live runs, not the offline suite: the Critic was
+rejecting work the Builder had genuinely done because it saw only final prose (fixed
+by feeding tool-execution evidence into the review input), and the original FAST-tier
+models didn't exist. Offline tests can't catch either class of problem.
 
 ## Running it
 
