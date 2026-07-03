@@ -21,23 +21,32 @@ from .config import Tier, models_for
 class ModelStats:
     successes: int = 0
     failures: int = 0
+    total_latency_s: float = 0.0
+    latency_samples: int = 0
 
     @property
     def success_rate(self) -> float:
         total = self.successes + self.failures
         return self.successes / total if total else 1.0  # optimistic prior
 
+    @property
+    def average_latency_s(self) -> float:
+        return self.total_latency_s / self.latency_samples if self.latency_samples else 0.0
+
 
 @dataclass
 class Router:
     _stats: dict[str, ModelStats] = field(default_factory=dict)
 
-    def record(self, model: str, ok: bool) -> None:
+    def record(self, model: str, ok: bool, latency_s: float | None = None) -> None:
         stats = self._stats.setdefault(model, ModelStats())
         if ok:
             stats.successes += 1
         else:
             stats.failures += 1
+        if latency_s is not None:
+            stats.total_latency_s += latency_s
+            stats.latency_samples += 1
 
     def fallback_chain(self, tier: Tier) -> list[str]:
         """Models for a tier, healthy-first: anything with a success rate below

@@ -51,6 +51,60 @@ def test_run_agent_returns_immediately_when_no_tool_calls(fake_backend) -> None:
     assert result.content == "done, no tools needed"
 
 
+def test_run_agent_populates_token_counts_from_response(fake_backend) -> None:
+    backend = fake_backend(
+        lambda messages: {
+            "message": {"content": "done"},
+            "prompt_eval_count": 50,
+            "eval_count": 20,
+        }
+    )
+    agent = Agent(name="Planner", system_prompt="test", tier=Tier.REASONING)
+
+    result = run_agent(agent, "plan something", backend, Router(), ToolRegistry())
+
+    assert result.tokens_in == 50
+    assert result.tokens_out == 20
+
+
+def test_run_agent_sums_token_counts_across_multiple_turns(fake_backend) -> None:
+    calls = {"n": 0}
+
+    def script(messages):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {
+                "message": {
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "word_count", "arguments": {"text": "hello there world"}}}],
+                },
+                "prompt_eval_count": 30,
+                "eval_count": 10,
+            }
+        return {
+            "message": {"content": "The text has 3 words."},
+            "prompt_eval_count": 45,
+            "eval_count": 15,
+        }
+
+    backend = fake_backend(script)
+    agent = Agent(name="Builder", system_prompt="test", tier=Tier.CODING, tools=["word_count"])
+    result = run_agent(agent, "count words in: hello there world", backend, Router(), make_word_count_registry())
+
+    assert result.tokens_in == 75
+    assert result.tokens_out == 25
+
+
+def test_run_agent_defaults_token_counts_to_zero_when_absent_from_response(fake_backend) -> None:
+    backend = fake_backend(lambda messages: {"message": {"content": "done, no tools needed"}})
+    agent = Agent(name="Planner", system_prompt="test", tier=Tier.REASONING)
+
+    result = run_agent(agent, "plan something", backend, Router(), ToolRegistry())
+
+    assert result.tokens_in == 0
+    assert result.tokens_out == 0
+
+
 def test_run_agent_stops_at_max_turn_budget(fake_backend, monkeypatch) -> None:
     import ollama_swarm.agents as agents_module
 

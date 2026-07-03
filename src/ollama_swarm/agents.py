@@ -9,6 +9,7 @@ a fake `OllamaBackend`.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +33,8 @@ class AgentRunResult:
     content: str
     transcript: list[dict[str, Any]]
     tool_calls_made: int
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 def run_agent(
@@ -53,6 +56,8 @@ def run_agent(
     tools_schema = registry.schemas(agent.tools) if agent.tools else None
     model_used = ""
     tool_calls_made = 0
+    tokens_in = 0
+    tokens_out = 0
 
     for _ in range(SETTINGS.max_tool_turns):
         chain = router.fallback_chain(agent.tier)
@@ -60,10 +65,15 @@ def run_agent(
         def _on_fail(model: str, exc: Exception) -> None:
             router.record(model, ok=False)
 
+        started = time.perf_counter()
         model_used, response = backend.chat_with_fallback(
             chain, messages, tools=tools_schema, on_attempt_failed=_on_fail
         )
-        router.record(model_used, ok=True)
+        elapsed = time.perf_counter() - started
+        router.record(model_used, ok=True, latency_s=elapsed)
+
+        tokens_in += response.get("prompt_eval_count", 0)
+        tokens_out += response.get("eval_count", 0)
 
         message = response["message"]
         messages.append({"role": "assistant", "content": message.get("content", ""),
@@ -76,6 +86,8 @@ def run_agent(
                 content=message.get("content", ""),
                 transcript=messages,
                 tool_calls_made=tool_calls_made,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
             )
 
         for call in tool_calls:
@@ -93,4 +105,6 @@ def run_agent(
         content="[max tool turns reached without a final answer]",
         transcript=messages,
         tool_calls_made=tool_calls_made,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
     )
