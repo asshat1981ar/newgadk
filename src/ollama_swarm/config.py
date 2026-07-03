@@ -28,7 +28,9 @@ class Tier(str, Enum):
 MODEL_CATALOG: dict[Tier, list[str]] = {
     Tier.REASONING: ["glm-5:cloud", "deepseek-v4-flash:cloud", "kimi-k2.6:cloud"],
     Tier.CODING: ["qwen3-coder-next:cloud", "devstral-2:cloud", "kimi-k2.6:cloud"],
-    Tier.FAST: ["ministral-3:cloud", "nemotron-3-nano:cloud"],
+    # Probed live 2026-07: ministral-3/nemotron-3-nano/gemini-3-flash 404 on
+    # Ollama Cloud; qwen3.5 and gemma4 resolve.
+    Tier.FAST: ["qwen3.5:cloud", "gemma4:cloud"],
     Tier.EMBED: ["nomic-embed-text"],
 }
 

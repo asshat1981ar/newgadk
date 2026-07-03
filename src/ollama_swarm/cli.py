@@ -18,17 +18,29 @@ def main() -> None:
     goal = " ".join(sys.argv[1:])
     backend = OllamaBackend()
     registry = default_registry()
-    planner, builder, critic = default_swarm_agents()
+    agents = default_swarm_agents()
     memory = Memory(backend)
 
-    swarm = Swarm(planner, builder, critic, backend, registry, memory=memory)
+    swarm = Swarm(
+        agents.planner,
+        agents.architect,
+        agents.builder,
+        agents.critic,
+        agents.governor,
+        agents.finops,
+        backend,
+        registry,
+        memory=memory,
+    )
     result = swarm.run(goal)
 
     for record in result.history:
         print(f"\n=== {record.phase} ({record.agent} via {record.model_used}) ===")
         print(record.content)
 
-    print(f"\n--- {'APPROVED' if result.approved else 'UNRESOLVED'} after {result.rework_count} rework cycle(s) ---")
+    verdict = "APPROVED" if result.approved else "UNRESOLVED"
+    governed = "governed" if result.governed else "ungoverned"
+    print(f"\n--- {verdict} ({governed}) after {result.rework_count} critic + {result.governor_rework_count} governor rework cycle(s) ---")
 
 
 if __name__ == "__main__":

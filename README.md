@@ -45,14 +45,47 @@ run_agent()  ──►  Router.fallback_chain(tier)  ──►  OllamaBackend.ch
 ToolRegistry.dispatch()  (loop until final answer or max_tool_turns)
 
 Swarm.run(goal):
-  PLAN (Planner)  ──►  BUILD (Builder)  ──►  REVIEW (Critic)
-                            ▲                     │
-                            └── rework, bounded ───┘  (max_rework, default 2)
+  PLAN (Planner) ──► ARCHITECT (Architect) ──► IMPLEMENT (Builder) ──► REVIEW (Critic)
+                                                     ▲                      │
+                                                     └── rework, bounded ────┘  (max_rework, default 2)
+                                                                            │ APPROVE
+                                                                            ▼
+                                    IMPLEMENT ◄── NO-GO, bounded ──── GOVERN (Governor)
+                                    (max_governor_rework, default 1)        │ GO (or budget exhausted)
+                                                                            ▼
+                                                              OPERATE (FinOps — always runs)
 ```
+
+- **Architect** inspects the workspace read-only (`list_dir`, `read_file`) and writes a
+  short design note the Builder must respect.
+- **Governor** has exactly one tool, `run_quality_gates`, which actually executes
+  `pytest` (and `ruff check` when installed) in the workspace — approval stops being an
+  LLM's opinion and becomes a real test run. On NO-GO the work goes back through
+  IMPLEMENT and REVIEW before the Governor sees it again.
+- **FinOps** always runs last, summarizing a per-phase token ledger built from the
+  `prompt_eval_count`/`eval_count` fields every Ollama response already carries.
+  (GADK's Pulse role was deliberately *not* ported as an agent — latency/health
+  bookkeeping is deterministic, so it lives in `Router`/`AgentRunResult` as plain data.)
 
 Memory is consulted before PLAN (relevant past runs, if any) and written to after
 the pipeline finishes (`goal -> outcome` summary), so future runs on similar goals
 get context for free.
+
+## Dev tools (opt-in)
+
+Builder can get real filesystem/shell/git capability — `read_file`, `write_file`,
+`list_dir`, `run_shell`, `git_diff`, `git_commit` — but only when explicitly enabled:
+
+```bash
+OLLAMA_SWARM_ENABLE_DEV_TOOLS=1 python examples/run_demo.py
+```
+
+All of these are confined to `Settings.workspace_root` (default `./workspace`, override
+with `OLLAMA_SWARM_WORKSPACE`); path traversal out of the workspace raises. **Caveat:**
+`run_shell` and `git_commit` execute real subprocesses — `cwd` confinement is the only
+sandboxing (no container, no resource limits). Fine for a local single-user tool;
+not safe for untrusted goals. The `run_quality_gates` tool is always registered
+(it's narrow and the Governor needs it), independent of this flag.
 
 ## Verified live in this sandbox
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 
+from .config import SETTINGS
 from .tools import ToolRegistry
 
 _MAX_OUTPUT_CHARS = 4000
@@ -25,8 +26,12 @@ def _truncate(text: str) -> str:
 
 def register_governance_tools(registry: ToolRegistry) -> None:
     @registry.register
-    def run_quality_gates(workspace: str = ".") -> dict:
+    def run_quality_gates(workspace: str = "") -> dict:
         """Run the test suite (and linter, if available) for a workspace."""
+        # Empty default resolves to the swarm's own workspace, not the host
+        # process CWD — the Governor gates the work the swarm produced, not the
+        # project the swarm happens to be running from.
+        workspace = workspace or SETTINGS.workspace_root
         try:
             proc = subprocess.run(
                 ["python3", "-m", "pytest", "-q"],

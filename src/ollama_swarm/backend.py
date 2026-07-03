@@ -29,7 +29,10 @@ class OllamaBackend:
         if self._client is None:
             from ollama import Client
 
-            kwargs: dict[str, Any] = {"host": self.settings.active_host()}
+            kwargs: dict[str, Any] = {
+                "host": self.settings.active_host(),
+                "timeout": self.settings.timeout_s,
+            }
             if self.settings.mode == "direct-cloud" and self.settings.api_key:
                 kwargs["headers"] = {"Authorization": f"Bearer {self.settings.api_key}"}
             self._client = Client(**kwargs)

@@ -109,6 +109,20 @@ class Swarm:
             return False
         return "GO" in upper
 
+    @staticmethod
+    def _tool_evidence(build: AgentRunResult) -> str:
+        """Summarize the Builder's actual tool activity for the Critic. The Critic
+        only sees final prose otherwise, and an agent that really did the work via
+        tools shouldn't be rejected for not narrating it."""
+        if not build.tool_calls_made:
+            return "Tool execution evidence: none (no tools were called)."
+        tool_results = [m["content"] for m in build.transcript if m.get("role") == "tool"]
+        excerpts = "\n".join(f"- {r[:300]}" for r in tool_results[-5:])
+        return (
+            f"Tool execution evidence: {build.tool_calls_made} real tool call(s) were "
+            f"executed during implementation. Recent tool results:\n{excerpts}"
+        )
+
     def _review_cycle(self, goal: str, build: AgentRunResult, result: SwarmResult) -> tuple[AgentRunResult, bool]:
         """The Critic REVIEW<->IMPLEMENT rework loop, bounded by `max_rework`.
         Returns the (possibly revised) build and whether the Critic approved it."""
@@ -116,6 +130,7 @@ class Swarm:
         for _ in range(self.max_rework + 1):
             review_input = (
                 f"Goal: {goal}\n\nProposed solution:\n{build.content}\n\n"
+                f"{self._tool_evidence(build)}\n\n"
                 "Respond with APPROVE or REQUEST_CHANGES: <reason>."
             )
             review = self._run(self.critic, review_input)
