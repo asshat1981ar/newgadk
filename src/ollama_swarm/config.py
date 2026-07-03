@@ -48,6 +48,7 @@ class Settings:
     api_key: str | None = field(default_factory=lambda: os.environ.get("OLLAMA_API_KEY"))
     timeout_s: float = field(default_factory=lambda: float(os.environ.get("OLLAMA_TIMEOUT_S", "60")))
     max_tool_turns: int = field(default_factory=lambda: int(os.environ.get("OLLAMA_MAX_TOOL_TURNS", "6")))
+    workspace_root: str = field(default_factory=lambda: os.environ.get("OLLAMA_SWARM_WORKSPACE", "./workspace"))
 
     def active_host(self) -> str:
         return self.cloud_host if self.mode == "direct-cloud" else self.host
