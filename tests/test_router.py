@@ -33,3 +33,27 @@ def test_healthy_model_keeps_its_position() -> None:
     router.record(chain[0], ok=True)
 
     assert router.fallback_chain(Tier.CODING) == chain
+
+
+def test_record_accumulates_average_latency() -> None:
+    router = Router()
+    chain = models_for(Tier.CODING)
+    model = chain[0]
+
+    router.record(model, ok=True, latency_s=1.5)
+    router.record(model, ok=True, latency_s=2.5)
+
+    stats = router._stats[model]
+    assert stats.average_latency_s == 2.0
+
+
+def test_record_without_latency_does_not_affect_average() -> None:
+    router = Router()
+    chain = models_for(Tier.CODING)
+    model = chain[0]
+
+    router.record(model, ok=True)
+    router.record(model, ok=False)
+
+    stats = router._stats[model]
+    assert stats.average_latency_s == 0.0
