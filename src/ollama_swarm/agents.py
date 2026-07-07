@@ -72,8 +72,8 @@ def run_agent(
         elapsed = time.perf_counter() - started
         router.record(model_used, ok=True, latency_s=elapsed)
 
-        tokens_in += response.get("prompt_eval_count", 0)
-        tokens_out += response.get("eval_count", 0)
+        tokens_in += response.get("prompt_eval_count") or 0
+        tokens_out += response.get("eval_count") or 0
 
         message = response["message"]
         messages.append({"role": "assistant", "content": message.get("content", ""),

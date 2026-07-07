@@ -41,6 +41,7 @@ class SwarmResult:
     rework_count: int = 0        # Critic rework count, as today
     governed: bool = False       # True only if Governor said GO
     governor_rework_count: int = 0
+    security_verdict: str = ""   # Last Security agent verdict
     finops_summary: str = ""     # FinOps agent's final content, for easy access without digging through history
 
 
@@ -59,9 +60,12 @@ class Swarm:
     def __init__(
         self,
         planner: Agent,
+        scaffolder: Agent,
         architect: Agent,
         builder: Agent,
+        test_gen: Agent,
         critic: Agent,
+        security: Agent,
         governor: Agent,
         finops: Agent,
         backend: OllamaBackend,
@@ -71,9 +75,12 @@ class Swarm:
         max_governor_rework: int = 1,
     ) -> None:
         self.planner = planner
+        self.scaffolder = scaffolder
         self.architect = architect
         self.builder = builder
+        self.test_gen = test_gen
         self.critic = critic
+        self.security = security
         self.governor = governor
         self.finops = finops
         self.backend = backend
@@ -101,11 +108,13 @@ class Swarm:
 
     @staticmethod
     def _is_go(content: str) -> bool:
-        """`"NO-GO"` contains the substring `"GO"`, so a naive `"GO" in text` check
-        would misread a NO-GO as a GO. Check for NO-GO first; only treat it as a
-        go if that's absent and "GO" is present."""
+        """Check if the governor verdict is GO or NO-GO, defaulting non-standard values to False."""
         upper = content.upper()
-        if "NO-GO" in upper:
+        if "NO-GO" in upper or "NO GO" in upper:
+            return False
+        if "GOVERN: GO" in upper:
+            return True
+        if "GOVERN:" in upper:
             return False
         return "GO" in upper
 
@@ -122,6 +131,19 @@ class Swarm:
             f"Tool execution evidence: {build.tool_calls_made} real tool call(s) were "
             f"executed during implementation. Recent tool results:\n{excerpts}"
         )
+
+    @staticmethod
+    def _is_security_go(content: str) -> tuple[bool, bool]:
+        """Return (is_go, is_warn) for a Security agent response."""
+        upper = content.upper()
+        if "SECURITY: NO-GO" in upper:
+            return False, False
+        if "SECURITY: WARN" in upper:
+            return True, True
+        if "SECURITY: GO" in upper:
+            return True, False
+        # Default to warn if verdict is ambiguous
+        return True, True
 
     def _review_cycle(self, goal: str, build: AgentRunResult, result: SwarmResult) -> tuple[AgentRunResult, bool]:
         """The Critic REVIEW<->IMPLEMENT rework loop, bounded by `max_rework`.
@@ -161,6 +183,15 @@ class Swarm:
         )
 
     def run(self, goal: str) -> SwarmResult:
+        # Validate all required agents up-front so failures are explicit.
+        _required = (
+            "planner", "scaffolder", "architect", "builder",
+            "test_gen", "critic", "security", "governor", "finops",
+        )
+        for _slot in _required:
+            if getattr(self, _slot) is None:
+                raise TypeError(f"Swarm.run() requires a non-None agent for '{_slot}'")
+
         result = SwarmResult(goal=goal)
         self._ledger = []
         context = None
@@ -169,24 +200,103 @@ class Swarm:
             if recalled:
                 context = "\n".join(f"- {e.text}" for e in recalled)
 
+        # --- PLAN ---
         plan = self._run(self.planner, goal, context=context)
         self._record(plan, "PLAN", self.planner, result.history)
 
+        # --- ARCHITECT ---
         architect_input = f"Goal: {goal}\n\nPlan:\n{plan.content}"
         architect = self._run(self.architect, architect_input)
         self._record(architect, "ARCHITECT", self.architect, result.history)
 
-        build_input = f"Goal: {goal}\n\nPlan:\n{plan.content}\n\nArchitecture notes:\n{architect.content}"
+        # --- SCAFFOLD (always-on) ---
+        from .scaffold import scaffold_project, detect_language
+        project_name = goal.split()[0] if goal.split() else "project"
+        written_files = scaffold_project(architect.content, project_name=project_name)
+        scaffold_summary = (
+            f"Scaffolded {len(written_files)} file(s) for language "
+            f"'{detect_language(architect.content)}': {', '.join(written_files.keys()) or 'none (all existed)'}"
+        )
+        # Record scaffold as a synthetic phase entry
+        from .agents import AgentRunResult
+        scaffold_run = AgentRunResult(
+            content=scaffold_summary,
+            model_used="scaffold",
+            tokens_in=0,
+            tokens_out=0,
+            tool_calls_made=len(written_files),
+            transcript=[],
+        )
+        self._record(scaffold_run, "SCAFFOLD", self.scaffolder, result.history)
+
+        # --- IMPLEMENT ---
+        build_input = (
+            f"Goal: {goal}\n\nPlan:\n{plan.content}\n\n"
+            f"Architecture notes:\n{architect.content}\n\n"
+            f"Scaffolded files already in workspace:\n{scaffold_summary}"
+        )
         build = self._run(self.builder, build_input)
         self._record(build, "IMPLEMENT", self.builder, result.history)
 
-        build, approved = self._review_cycle(goal, build, result)
+        # --- TEST-GEN ---
+        test_gen_input = (
+            f"Goal: {goal}\n\nThe Builder has implemented the solution. "
+            f"Implementation summary:\n{build.content}\n\n"
+            "Write comprehensive tests covering every public function, class, and edge case. "
+            "Use the test framework appropriate for the detected language."
+        )
+        test_gen_run = self._run(self.test_gen, test_gen_input)
+        self._record(test_gen_run, "TEST-GEN", self.test_gen, result.history)
+
+        # Provide test output to Builder rework loop context
+        build_with_tests_context = (
+            f"{build.content}\n\n"
+            f"Generated tests:\n{test_gen_run.content}\n\n"
+            f"{self._tool_evidence(test_gen_run)}"
+        )
+        # Create a synthetic run result that merges implementation + test evidence
+        import dataclasses
+        augmented_build = dataclasses.replace(
+            build,
+            content=build_with_tests_context,
+        )
+
+        # --- REVIEW (with tests context) ---
+        augmented_build, approved = self._review_cycle(goal, augmented_build, result)
         result.approved = approved
 
         if approved:
+            # --- SECURITY ---
+            security_input = (
+                f"Goal: {goal}\n\nImplementation has been approved by the Critic. "
+                "Run the security scan now."
+            )
+            security_run = self._run(self.security, security_input)
+            self._record(security_run, "SECURITY", self.security, result.history)
+
+            security_go, security_warn = self._is_security_go(security_run.content)
+            result.security_verdict = security_run.content
+
+            # On SECURITY: NO-GO, send findings back to Builder for one fix pass,
+            # then re-run security once more (no loop — one chance to fix).
+            if not security_go:
+                sec_fix_input = (
+                    f"Goal: {goal}\n\nPrevious attempt:\n{augmented_build.content}\n\n"
+                    f"Security findings:\n{security_run.content}\n\nFix the security issues."
+                )
+                build_fixed = self._run(self.builder, sec_fix_input)
+                self._record(build_fixed, "IMPLEMENT", self.builder, result.history)
+                augmented_build = dataclasses.replace(build_fixed, content=build_fixed.content)
+
+                security_run2 = self._run(self.security, security_input)
+                self._record(security_run2, "SECURITY", self.security, result.history)
+                security_go, _ = self._is_security_go(security_run2.content)
+                result.security_verdict = security_run2.content
+
+            # --- GOVERN ---
             governor_rework_count = 0
             while True:
-                governor_input = f"Goal: {goal}\n\nSolution:\n{build.content}"
+                governor_input = f"Goal: {goal}\n\nSolution:\n{augmented_build.content}"
                 governor = self._run(self.governor, governor_input)
                 self._record(governor, "GOVERN", self.governor, result.history)
 
@@ -199,19 +309,21 @@ class Swarm:
                     break
 
                 rework_input = (
-                    f"Goal: {goal}\n\nPrevious attempt:\n{build.content}\n\n"
+                    f"Goal: {goal}\n\nPrevious attempt:\n{augmented_build.content}\n\n"
                     f"Governor feedback:\n{governor.content}\n\nRevise accordingly."
                 )
-                build = self._run(self.builder, rework_input)
-                self._record(build, "IMPLEMENT", self.builder, result.history)
+                build_revised = self._run(self.builder, rework_input)
+                self._record(build_revised, "IMPLEMENT", self.builder, result.history)
+                augmented_build = dataclasses.replace(build_revised, content=build_revised.content)
 
-                build, approved = self._review_cycle(goal, build, result)
+                augmented_build, approved = self._review_cycle(goal, augmented_build, result)
                 result.approved = approved
                 if not approved:
                     break
 
             result.governor_rework_count = governor_rework_count
 
+        # --- OPERATE (FinOps — always runs) ---
         finops_input = f"Goal: {goal}\n\nToken ledger:\n{self._format_ledger()}"
         finops = self._run(self.finops, finops_input)
         self._record(finops, "OPERATE", self.finops, result.history)

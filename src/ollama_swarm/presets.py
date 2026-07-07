@@ -32,6 +32,10 @@ def default_registry() -> ToolRegistry:
 
     register_governance_tools(registry)
 
+    from .security_gates import register_security_tools
+
+    register_security_tools(registry)
+
     # fs/shell/git tools are opt-in: unset (or anything other than "1") keeps
     # Builder toy-tools-only, so a default run can't touch the filesystem.
     if os.environ.get("OLLAMA_SWARM_ENABLE_DEV_TOOLS") == "1":
@@ -45,9 +49,12 @@ def default_registry() -> ToolRegistry:
 @dataclass
 class SwarmAgents:
     planner: Agent
+    scaffolder: Agent
     architect: Agent
     builder: Agent
+    test_gen: Agent
     critic: Agent
+    security: Agent
     governor: Agent
     finops: Agent
 
@@ -61,14 +68,27 @@ def default_swarm_agents() -> SwarmAgents:
         ),
         tier=Tier.REASONING,
     )
+    scaffolder = Agent(
+        name="Scaffolder",
+        system_prompt=(
+            "You are the Scaffolder. Read the Architect's file manifest and "
+            "language. Use your tools to write the skeleton files to the workspace "
+            "(entry-point stubs, build manifests, test directory, .gitignore, "
+            "README.md). Do not write business logic — only the project structure. "
+            "Confirm each file you create."
+        ),
+        tier=Tier.CODING,
+        tools=["write_file", "list_dir", "read_file"],
+    )
     architect = Agent(
         name="Architect",
         system_prompt=(
-            "You are the Architect. Given the goal and the Planner's step list, "
+            "You are the Architect. Given the goal and the planner's step list, "
             "optionally inspect the current workspace layout with your tools. "
             "Produce a short design note: which files/components to add or "
             "change, how data flows between them, and 2-3 explicit constraints "
-            "the Builder must respect. Do not write implementation code. Keep it "
+            "the builder must respect. Also state the target language explicitly "
+            "(e.g. 'Language: Python'). Do not write implementation code. Keep it "
             "under ~200 words unless the goal genuinely requires more."
         ),
         tier=Tier.REASONING,
@@ -78,7 +98,10 @@ def default_swarm_agents() -> SwarmAgents:
         name="Builder",
         system_prompt=(
             "You are the Builder. Given a goal and a plan (or prior attempt plus "
-            "reviewer feedback), produce the actual solution. Be direct and complete."
+            "reviewer feedback and/or failing tests), produce the actual solution. "
+            "Be direct and complete. The workspace skeleton already exists — build "
+            "on top of it, do not recreate files that are already there unless "
+            "explicitly told to replace them."
         ),
         tier=Tier.CODING,
         tools=[
@@ -92,14 +115,41 @@ def default_swarm_agents() -> SwarmAgents:
             "git_commit",
         ],
     )
+    test_gen = Agent(
+        name="TestEngineer",
+        system_prompt=(
+            "You are the Test Engineer. Read the Builder's implementation in the "
+            "workspace and write comprehensive tests covering every public function, "
+            "class, and edge case. Use the workspace's existing test framework "
+            "(pytest for Python, node:test for Node, cargo test for Rust). "
+            "Write tests to the tests/ directory. Aim for full coverage — "
+            "happy paths, error paths, boundary conditions."
+        ),
+        tier=Tier.CODING,
+        tools=["read_file", "write_file", "list_dir", "run_shell"],
+    )
     critic = Agent(
         name="Critic",
         system_prompt=(
             "You are the Critic. Judge whether the proposed solution actually "
-            "satisfies the goal. Reply with either 'APPROVE' or "
+            "satisfies the goal, considering both the implementation and the "
+            "generated tests. Reply with either 'APPROVE' or "
             "'REQUEST_CHANGES: <specific, actionable reason>'. Be strict but fair."
         ),
         tier=Tier.REASONING,
+    )
+    security = Agent(
+        name="Security",
+        system_prompt=(
+            "You are the Security Auditor. Call `run_security_scan` on the "
+            "workspace. Trust its output completely. Reply with exactly one of:\n"
+            "  SECURITY: GO                  — no issues found\n"
+            "  SECURITY: WARN: <details>     — scanner missing or low-severity findings\n"
+            "  SECURITY: NO-GO: <finding>    — high/critical severity findings\n"
+            "Do not add commentary beyond the verdict line."
+        ),
+        tier=Tier.REASONING,
+        tools=["run_security_scan"],
     )
     governor = Agent(
         name="Governor",
@@ -126,9 +176,12 @@ def default_swarm_agents() -> SwarmAgents:
     )
     return SwarmAgents(
         planner=planner,
+        scaffolder=scaffolder,
         architect=architect,
         builder=builder,
+        test_gen=test_gen,
         critic=critic,
+        security=security,
         governor=governor,
         finops=finops,
     )

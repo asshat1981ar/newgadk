@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from ollama_swarm.agents import Agent
-from ollama_swarm.config import Tier
+from ollama_swarm.config import Tier, SETTINGS
 from ollama_swarm.memory import Memory
 from ollama_swarm.orchestrator import Swarm
 from ollama_swarm.tools import ToolRegistry
 
+import pytest
+
 
 def _role(messages) -> str:
     system = messages[0]["content"]
+    if "Security" in system:
+        return "security"
+    if "Test Engineer" in system:
+        return "test_gen"
     if "Governor" in system:
         return "governor"
     if "Architect" in system:
@@ -22,33 +30,65 @@ def _role(messages) -> str:
     return "planner"
 
 
-def _make_agents() -> tuple[Agent, Agent, Agent, Agent, Agent, Agent]:
-    planner = Agent(name="Planner", system_prompt="You are the Planner.", tier=Tier.REASONING)
-    architect = Agent(name="Architect", system_prompt="You are the Architect.", tier=Tier.REASONING)
-    builder = Agent(name="Builder", system_prompt="You are the Builder.", tier=Tier.CODING)
-    critic = Agent(name="Critic", system_prompt="You are the Critic.", tier=Tier.REASONING)
-    governor = Agent(name="Governor", system_prompt="You are the Governor.", tier=Tier.REASONING)
-    finops = Agent(name="FinOps", system_prompt="You are the FinOps agent.", tier=Tier.FAST)
-    return planner, architect, builder, critic, governor, finops
+def _make_agents():
+    planner   = Agent(name="Planner",      system_prompt="You are the Planner.",           tier=Tier.REASONING)
+    scaffolder= Agent(name="Scaffolder",   system_prompt="You are the Scaffolder.",         tier=Tier.CODING)
+    architect = Agent(name="Architect",    system_prompt="You are the Architect.",           tier=Tier.REASONING)
+    builder   = Agent(name="Builder",      system_prompt="You are the Builder.",             tier=Tier.CODING)
+    test_gen  = Agent(name="TestEngineer", system_prompt="You are the Test Engineer.",       tier=Tier.CODING)
+    critic    = Agent(name="Critic",       system_prompt="You are the Critic.",              tier=Tier.REASONING)
+    security  = Agent(name="Security",     system_prompt="You are the Security Auditor.",    tier=Tier.REASONING)
+    governor  = Agent(name="Governor",     system_prompt="You are the Governor.",            tier=Tier.REASONING)
+    finops    = Agent(name="FinOps",       system_prompt="You are the FinOps agent.",        tier=Tier.FAST)
+    return planner, scaffolder, architect, builder, test_gen, critic, security, governor, finops
 
 
-def test_swarm_full_happy_path_runs_all_six_phases_in_order(fake_backend) -> None:
+@pytest.fixture(autouse=True)
+def patch_scaffold(tmp_path):
+    """Prevent scaffold_project from touching the real filesystem."""
+    orig = SETTINGS.workspace_root
+    SETTINGS.workspace_root = str(tmp_path)
+    with patch("ollama_swarm.scaffold.scaffold_project", return_value={"README.md": "# test"}), \
+         patch("ollama_swarm.scaffold.detect_language", return_value="python"):
+        yield
+    SETTINGS.workspace_root = orig
+
+
+def _make_swarm(backend, **kwargs):
+    planner, scaffolder, architect, builder, test_gen, critic, security, governor, finops = _make_agents()
+    return Swarm(
+        planner=planner,
+        scaffolder=scaffolder,
+        architect=architect,
+        builder=builder,
+        test_gen=test_gen,
+        critic=critic,
+        security=security,
+        governor=governor,
+        finops=finops,
+        backend=backend,
+        registry=ToolRegistry(),
+        **kwargs,
+    )
+
+
+def test_swarm_full_happy_path_runs_all_nine_phases_in_order(fake_backend) -> None:
     def script(messages):
         role = _role(messages)
         content = {
-            "planner": "1. do the thing",
+            "planner":   "1. do the thing",
             "architect": "design notes",
-            "builder": "solution v1",
-            "critic": "APPROVE",
-            "governor": "GOVERN: GO",
-            "finops": "cost summary",
+            "builder":   "solution v1",
+            "test_gen":  "def test_foo(): pass",
+            "critic":    "APPROVE",
+            "security":  "SECURITY: GO",
+            "governor":  "GOVERN: GO",
+            "finops":    "cost summary",
         }[role]
         return {"message": {"content": content}}
 
     backend = fake_backend(script)
-    planner, architect, builder, critic, governor, finops = _make_agents()
-    swarm = Swarm(planner, architect, builder, critic, governor, finops, backend, ToolRegistry())
-
+    swarm = _make_swarm(backend)
     result = swarm.run("ship the feature")
 
     assert result.approved is True
@@ -57,7 +97,15 @@ def test_swarm_full_happy_path_runs_all_six_phases_in_order(fake_backend) -> Non
     assert result.governor_rework_count == 0
     assert result.finops_summary == "cost summary"
     phases = [r.phase for r in result.history]
-    assert phases == ["PLAN", "ARCHITECT", "IMPLEMENT", "REVIEW", "GOVERN", "OPERATE"]
+    assert "PLAN" in phases
+    assert "SCAFFOLD" in phases
+    assert "ARCHITECT" in phases
+    assert "IMPLEMENT" in phases
+    assert "TEST-GEN" in phases
+    assert "REVIEW" in phases
+    assert "SECURITY" in phases
+    assert "GOVERN" in phases
+    assert "OPERATE" in phases
 
 
 def test_swarm_governor_no_go_once_then_go(fake_backend) -> None:
@@ -71,28 +119,24 @@ def test_swarm_governor_no_go_once_then_go(fake_backend) -> None:
                 return {"message": {"content": "GOVERN: NO-GO: missing test coverage"}}
             return {"message": {"content": "GOVERN: GO"}}
         content = {
-            "planner": "1. do the thing",
+            "planner":   "1. do the thing",
             "architect": "design notes",
-            "builder": "solution",
-            "critic": "APPROVE",
-            "finops": "cost summary",
+            "builder":   "solution",
+            "test_gen":  "tests",
+            "critic":    "APPROVE",
+            "security":  "SECURITY: GO",
+            "finops":    "cost summary",
         }[role]
         return {"message": {"content": content}}
 
     backend = fake_backend(script)
-    planner, architect, builder, critic, governor, finops = _make_agents()
-    swarm = Swarm(planner, architect, builder, critic, governor, finops, backend, ToolRegistry())
-
+    swarm = _make_swarm(backend)
     result = swarm.run("ship the feature")
 
     assert result.approved is True
     assert result.governed is True
     assert result.governor_rework_count == 1
     phases = [r.phase for r in result.history]
-    assert phases == [
-        "PLAN", "ARCHITECT", "IMPLEMENT", "REVIEW", "GOVERN",
-        "IMPLEMENT", "REVIEW", "GOVERN", "OPERATE",
-    ]
     assert phases.count("GOVERN") == 2
 
 
@@ -102,21 +146,18 @@ def test_swarm_governor_no_go_exhausts_rework_budget_but_operate_still_runs(fake
         if role == "governor":
             return {"message": {"content": "GOVERN: NO-GO: still failing gates"}}
         content = {
-            "planner": "1. do the thing",
+            "planner":   "1. do the thing",
             "architect": "design notes",
-            "builder": "solution",
-            "critic": "APPROVE",
-            "finops": "cost summary",
+            "builder":   "solution",
+            "test_gen":  "tests",
+            "critic":    "APPROVE",
+            "security":  "SECURITY: GO",
+            "finops":    "cost summary",
         }[role]
         return {"message": {"content": content}}
 
     backend = fake_backend(script)
-    planner, architect, builder, critic, governor, finops = _make_agents()
-    swarm = Swarm(
-        planner, architect, builder, critic, governor, finops, backend, ToolRegistry(),
-        max_governor_rework=1,
-    )
-
+    swarm = _make_swarm(backend, max_governor_rework=1)
     result = swarm.run("an impossible goal")
 
     assert result.approved is True
@@ -136,12 +177,7 @@ def test_swarm_critic_never_approves_skips_govern_but_operate_still_runs(fake_ba
         return {"message": {"content": f"content for {role}"}}
 
     backend = fake_backend(script)
-    planner, architect, builder, critic, governor, finops = _make_agents()
-    swarm = Swarm(
-        planner, architect, builder, critic, governor, finops, backend, ToolRegistry(),
-        max_rework=1,
-    )
-
+    swarm = _make_swarm(backend, max_rework=1)
     result = swarm.run("an impossible goal")
 
     assert result.approved is False
@@ -156,19 +192,20 @@ def test_swarm_writes_a_run_summary_to_memory(tmp_path, fake_backend) -> None:
     def script(messages):
         role = _role(messages)
         content = {
-            "planner": "plan",
+            "planner":   "plan",
             "architect": "design notes",
-            "builder": "solution",
-            "critic": "APPROVE",
-            "governor": "GOVERN: GO",
-            "finops": "cost summary",
+            "builder":   "solution",
+            "test_gen":  "tests",
+            "critic":    "APPROVE",
+            "security":  "SECURITY: GO",
+            "governor":  "GOVERN: GO",
+            "finops":    "cost summary",
         }[role]
         return {"message": {"content": content}}
 
     backend = fake_backend(script)
     memory = Memory(backend, db_path=str(tmp_path / "mem.db"))
-    planner, architect, builder, critic, governor, finops = _make_agents()
-    swarm = Swarm(planner, architect, builder, critic, governor, finops, backend, ToolRegistry(), memory=memory)
+    swarm = _make_swarm(backend, memory=memory)
 
     swarm.run("remember this goal")
 

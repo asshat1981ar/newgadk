@@ -22,14 +22,17 @@ def main() -> None:
     memory = Memory(backend)
 
     swarm = Swarm(
-        agents.planner,
-        agents.architect,
-        agents.builder,
-        agents.critic,
-        agents.governor,
-        agents.finops,
-        backend,
-        registry,
+        planner=agents.planner,
+        scaffolder=agents.scaffolder,
+        architect=agents.architect,
+        builder=agents.builder,
+        test_gen=agents.test_gen,
+        critic=agents.critic,
+        security=agents.security,
+        governor=agents.governor,
+        finops=agents.finops,
+        backend=backend,
+        registry=registry,
         memory=memory,
     )
     result = swarm.run(goal)
