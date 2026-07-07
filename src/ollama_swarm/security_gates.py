@@ -138,9 +138,13 @@ def run_security_scan(workspace: str = "") -> dict:
             "findings": str,
         }
     """
-    workspace = workspace or SETTINGS.workspace_root
-    # Validate path is inside workspace root
-    resolve_safe_path(SETTINGS.workspace_root, ".")
+    # A model-supplied path is confined like every other tool's: scanners
+    # execute against real files, so an unconfined path points them (and any
+    # subprocess they spawn) at arbitrary directories on disk.
+    if workspace:
+        workspace = str(resolve_safe_path(SETTINGS.workspace_root, workspace))
+    else:
+        workspace = SETTINGS.workspace_root
     lang = _sniff_language(workspace)
     scanner = _get_scanner(lang)
     if scanner is None:

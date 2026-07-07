@@ -212,3 +212,36 @@ def test_swarm_writes_a_run_summary_to_memory(tmp_path, fake_backend) -> None:
     recalled = memory.recall("remember this goal", tag="run_summary")
     assert len(recalled) == 1
     assert "approved and governed" in recalled[0].text
+
+
+def test_swarm_survives_memory_db_deleted_mid_run(tmp_path, fake_backend) -> None:
+    # Live runs showed the Builder can delete the memory DB while "cleaning up"
+    # the workspace; a completed run must still be returned, not crash on the
+    # final run-summary write.
+    db_path = tmp_path / "mem.db"
+
+    def script(messages):
+        role = _role(messages)
+        if role == "builder":
+            db_path.unlink(missing_ok=True)
+        content = {
+            "planner":   "plan",
+            "architect": "design notes",
+            "builder":   "solution",
+            "test_gen":  "tests",
+            "critic":    "APPROVE",
+            "security":  "SECURITY: GO",
+            "governor":  "GOVERN: GO",
+            "finops":    "cost summary",
+        }[role]
+        return {"message": {"content": content}}
+
+    backend = fake_backend(script)
+    memory = Memory(backend, db_path=str(db_path))
+    swarm = _make_swarm(backend, memory=memory)
+
+    result = swarm.run("a goal whose workspace gets wiped")
+
+    assert result.approved is True
+    assert result.governed is True
+    assert result.finops_summary == "cost summary"

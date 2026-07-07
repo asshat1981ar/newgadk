@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from ollama_swarm.config import SETTINGS
 from ollama_swarm.quality_gates import register_governance_tools
 from ollama_swarm.tools import ToolRegistry
 
@@ -14,7 +15,12 @@ def _run_quality_gates(workspace: Path) -> dict:
     registry = ToolRegistry()
     register_governance_tools(registry)
     call = _make_call(str(workspace))
-    result = registry.dispatch(call)
+    orig_root = SETTINGS.workspace_root
+    SETTINGS.workspace_root = str(workspace)
+    try:
+        result = registry.dispatch(call)
+    finally:
+        SETTINGS.workspace_root = orig_root
     assert result.error is None, result.error
     return result.result
 
@@ -88,6 +94,39 @@ def test_lint_runs_when_ruff_installed(tmp_path: Path) -> None:
     (tmp_path / "bad_style.py").unlink()
     clean_result = _run_quality_gates(tmp_path)
     assert clean_result["lint_ok"] is True
+
+
+def test_workspace_outside_root_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    # The Governor's model chooses the argument; pytest executes conftest.py,
+    # so an unconfined path is arbitrary code execution outside the sandbox.
+    root = tmp_path / "ws"
+    root.mkdir()
+    monkeypatch.setattr(SETTINGS, "workspace_root", str(root))
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+
+    registry = ToolRegistry()
+    register_governance_tools(registry)
+    result = registry.dispatch(_make_call(str(outside)))
+
+    assert result.error is not None
+    assert "escapes" in result.error
+
+
+def test_relative_dot_resolves_to_workspace_root(tmp_path: Path, monkeypatch) -> None:
+    # Live runs showed the Governor passing "."; that must mean the swarm's
+    # workspace, not whatever CWD the host process happens to have.
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "test_ok.py").write_text("def test_ok():\n    assert True\n")
+    monkeypatch.setattr(SETTINGS, "workspace_root", str(root))
+
+    registry = ToolRegistry()
+    register_governance_tools(registry)
+    result = registry.dispatch(_make_call("."))
+
+    assert result.error is None
+    assert result.result["tests_ok"] is True
 
 
 def test_nonexistent_workspace_raises() -> None:

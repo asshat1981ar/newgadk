@@ -177,6 +177,30 @@ def test_workspace_isolation_and_env_vars():
             main()
             assert os.environ.get("OLLAMA_SWARM_ENABLE_DEV_TOOLS") == "0"
 
+def test_memory_db_lives_outside_workspace():
+    # Agents have full write access inside workspace_root, so the memory DB
+    # must be created outside it or a workspace cleanup deletes it mid-run.
+    test_argv = ["assistant", "build", "something"]
+    with patch.object(sys, "argv", test_argv):
+        with patch("ollama_swarm.assistant.OllamaBackend"), \
+             patch("ollama_swarm.assistant.Swarm") as mock_swarm_cls, \
+             patch("ollama_swarm.assistant.Memory") as mock_memory_cls:
+
+            mock_swarm = MagicMock()
+            mock_swarm_cls.return_value = mock_swarm
+            mock_result = MagicMock()
+            mock_result.history = []
+            mock_result.security_verdict = ""
+            mock_swarm.run.return_value = mock_result
+
+            SETTINGS.workspace_root = "./workspace"
+            main()
+
+            db_path = mock_memory_cls.call_args.kwargs["db_path"]
+            assert not db_path.startswith(SETTINGS.workspace_root + os.sep)
+            assert db_path != SETTINGS.workspace_root
+
+
 def test_interactive_loop():
     # If no goal is passed, it should query reasoning model, prompt for answers, synthesize, and run swarm.
     test_argv = ["assistant"]

@@ -10,6 +10,7 @@ import subprocess
 
 from .config import SETTINGS
 from .tools import ToolRegistry
+from .workspace import resolve_safe_path
 
 _MAX_OUTPUT_CHARS = 4000
 _TESTS_TIMEOUT_S = 60
@@ -30,8 +31,15 @@ def register_governance_tools(registry: ToolRegistry) -> None:
         """Run the test suite (and linter, if available) for a workspace."""
         # Empty default resolves to the swarm's own workspace, not the host
         # process CWD — the Governor gates the work the swarm produced, not the
-        # project the swarm happens to be running from.
-        workspace = workspace or SETTINGS.workspace_root
+        # project the swarm happens to be running from. A model-supplied path
+        # is confined the same way as every other tool: live runs showed the
+        # Governor passing "." and running pytest over the host CWD, and an
+        # unconfined path would let a prompt-injected model execute arbitrary
+        # conftest.py code anywhere on disk.
+        if workspace:
+            workspace = str(resolve_safe_path(SETTINGS.workspace_root, workspace))
+        else:
+            workspace = SETTINGS.workspace_root
         try:
             proc = subprocess.run(
                 ["python3", "-m", "pytest", "-q"],

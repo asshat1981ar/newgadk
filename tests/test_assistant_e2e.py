@@ -516,17 +516,18 @@ def test_t3_f3_3_governor_rework_exhaustion(mock_backend):
     assert res.governor_rework_count == 2
 
 
-def test_t3_f3_4_workspace_scoped_execution(tmp_path):
+def test_t3_f3_4_workspace_scoped_execution(tmp_path, monkeypatch):
     """Case 3.4: Verify quality gates run within the custom workspace path."""
     custom_ws = tmp_path / "custom_ws"
     custom_ws.mkdir()
     test_file = custom_ws / "test_dummy.py"
     test_file.write_text("def test_fail(): assert False")
-    
+    monkeypatch.setattr(SETTINGS, "workspace_root", str(custom_ws))
+
     registry = ToolRegistry()
     from ollama_swarm.quality_gates import register_governance_tools
     register_governance_tools(registry)
-    
+
     result = registry.dispatch({"function": {"name": "run_quality_gates", "arguments": {"workspace": str(custom_ws)}}})
     assert result.result["tests_ok"] is False
     assert "test_fail" in result.result["tests_output"]

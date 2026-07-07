@@ -224,7 +224,13 @@ def main() -> None:
     # 5. Swarm pipeline execution
     registry = default_registry()
     agents = default_swarm_agents()
-    memory_db = os.path.join(SETTINGS.workspace_root, "swarm_memory.db")
+    # The memory DB must live outside workspace_root: agents have full write
+    # access inside the workspace and can (and did, in live runs) delete an
+    # open DB file while "cleaning up" their deliverable.
+    memory_db = os.path.join(
+        os.path.dirname(SETTINGS.workspace_root),
+        os.path.basename(SETTINGS.workspace_root) + "_memory.db",
+    )
     memory = Memory(backend, db_path=memory_db)
 
     swarm = Swarm(

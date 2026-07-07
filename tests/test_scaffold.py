@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import ast
 import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from ollama_swarm.scaffold import detect_language, scaffold_project
+from ollama_swarm.scaffold import derive_project_name, detect_language, scaffold_project
 from ollama_swarm.config import SETTINGS
 
 
@@ -52,6 +55,33 @@ class TestDetectLanguage:
 
     def test_empty_string(self):
         assert detect_language("") == "generic"
+
+
+# ---------------------------------------------------------------------------
+# derive_project_name
+# ---------------------------------------------------------------------------
+
+class TestDeriveProjectName:
+    def test_plain_goal_uses_first_word(self):
+        assert derive_project_name("todo app with reminders") == "todo"
+
+    def test_skips_markdown_lead_in(self):
+        # Synthesized goals open with markdown; "**Synthesized" must not
+        # become "__synthesized".
+        goal = "**Synthesized Software Development Goal:** build an add function"
+        assert derive_project_name(goal) == "synthesized"
+
+    def test_skips_pure_punctuation_words(self):
+        assert derive_project_name("--- ### calculator project") == "calculator"
+
+    def test_skips_words_starting_with_digit(self):
+        assert derive_project_name("2048 game clone") == "game"
+
+    def test_empty_goal_falls_back(self):
+        assert derive_project_name("") == "project"
+
+    def test_symbol_only_goal_falls_back(self):
+        assert derive_project_name("*** !!! ???") == "project"
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +138,33 @@ class TestScaffoldPython:
         # Second call — all files already exist
         written = scaffold_project("Python tool", "counter")
         assert written == {}
+
+    def test_garbage_project_name_falls_back(self, isolated_workspace):
+        scaffold_project("Python tool", "**??!")
+        assert (isolated_workspace / "src" / "project").is_dir()
+
+    def test_placeholder_test_imports_nothing_from_package(self, isolated_workspace):
+        # The Builder may rename or delete the scaffolded package; the
+        # placeholder must not depend on it.
+        scaffold_project("Python tool", "my_app")
+        content = (isolated_workspace / "tests" / "test_main.py").read_text()
+        assert "my_app" not in content
+        tree = ast.parse(content)
+        imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+        assert imports == []
+
+    def test_placeholder_tests_pass_quality_gate(self, isolated_workspace):
+        # The Governor runs pytest in the workspace; a fresh scaffold must
+        # pass that gate before the Builder has written anything.
+        scaffold_project("Python tool", "my_app")
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "tests"],
+            cwd=isolated_workspace,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 # ---------------------------------------------------------------------------

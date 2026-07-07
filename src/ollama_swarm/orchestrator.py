@@ -15,6 +15,8 @@ gated on whether the run succeeded.
 
 from __future__ import annotations
 
+import sqlite3
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -210,8 +212,8 @@ class Swarm:
         self._record(architect, "ARCHITECT", self.architect, result.history)
 
         # --- SCAFFOLD (always-on) ---
-        from .scaffold import scaffold_project, detect_language
-        project_name = goal.split()[0] if goal.split() else "project"
+        from .scaffold import scaffold_project, detect_language, derive_project_name
+        project_name = derive_project_name(goal)
         written_files = scaffold_project(architect.content, project_name=project_name)
         scaffold_summary = (
             f"Scaffolded {len(written_files)} file(s) for language "
@@ -336,6 +338,11 @@ class Swarm:
                 outcome = "approved but ungoverned (governor rework exhausted)"
             else:
                 outcome = "unresolved"
-            self.memory.remember(f"Goal: {goal}\nOutcome: {outcome}", tag="run_summary")
+            # Memory is best-effort bookkeeping: a damaged DB (e.g. an agent
+            # wiped the workspace mid-run) must not discard a completed run.
+            try:
+                self.memory.remember(f"Goal: {goal}\nOutcome: {outcome}", tag="run_summary")
+            except sqlite3.Error as exc:
+                print(f"warning: could not store run summary in memory: {exc}", file=sys.stderr)
 
         return result
