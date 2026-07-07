@@ -1,4 +1,4 @@
-"""Live demo: runs the full 6-phase swarm against a real Ollama daemon.
+"""Live demo: runs the full 9-phase swarm against a real Ollama daemon.
 
 Enables the opt-in dev tools and uses a goal that exercises them, so this run
 proves out write_file/run_shell/run_quality_gates end-to-end — not just chat.
@@ -30,14 +30,17 @@ def main() -> None:
     memory = Memory(backend)
 
     swarm = Swarm(
-        agents.planner,
-        agents.architect,
-        agents.builder,
-        agents.critic,
-        agents.governor,
-        agents.finops,
-        backend,
-        registry,
+        planner=agents.planner,
+        scaffolder=agents.scaffolder,
+        architect=agents.architect,
+        builder=agents.builder,
+        test_gen=agents.test_gen,
+        critic=agents.critic,
+        security=agents.security,
+        governor=agents.governor,
+        finops=agents.finops,
+        backend=backend,
+        registry=registry,
         memory=memory,
         max_rework=1,
         max_governor_rework=1,

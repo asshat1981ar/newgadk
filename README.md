@@ -183,7 +183,7 @@ workspace), and dev tools are **on** by default — disable with `--no-dev-tools
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                       # 170 tests, all offline (scripted fake backend)
+pytest -q                       # all offline (scripted fake backend)
 
 python examples/run_demo.py     # live run against your Ollama daemon
 python -m ollama_swarm.cli "explain X"   # same, your own goal
