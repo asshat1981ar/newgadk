@@ -51,3 +51,33 @@ def test_dev_tools_absent_when_env_flag_unset(monkeypatch) -> None:
     names = {schema["function"]["name"] for schema in registry.schemas()}
     assert "write_file" not in names
     assert "run_shell" not in names
+
+
+def test_default_swarm_agents_and_registry_construct_a_swarm_without_error() -> None:
+    """Guards examples/run_demo.py and cli.py: both build Swarm from
+    default_swarm_agents() + OllamaBackend() + default_registry() using the
+    same keyword-arg call. If Swarm.__init__'s required params ever drift
+    from SwarmAgents' fields, this fails fast instead of only breaking the
+    unexercised example script at manual-run time."""
+    from ollama_swarm.backend import OllamaBackend
+    from ollama_swarm.orchestrator import Swarm
+
+    agents = default_swarm_agents()
+    registry = default_registry()
+    backend = OllamaBackend()  # construction is lazy; no network I/O until .client is touched
+
+    swarm = Swarm(
+        planner=agents.planner,
+        scaffolder=agents.scaffolder,
+        architect=agents.architect,
+        builder=agents.builder,
+        test_gen=agents.test_gen,
+        critic=agents.critic,
+        security=agents.security,
+        governor=agents.governor,
+        finops=agents.finops,
+        backend=backend,
+        registry=registry,
+    )
+    assert swarm.planner is agents.planner
+    assert swarm.security is agents.security

@@ -68,17 +68,15 @@ def default_swarm_agents() -> SwarmAgents:
         ),
         tier=Tier.REASONING,
     )
+    # Scaffolder is a label only — SCAFFOLD is deterministic (see
+    # orchestrator.py's SCAFFOLD phase, which calls scaffold_project()
+    # directly and never routes through run_agent(scaffolder, ...)). This
+    # Agent exists solely so PhaseRecord/self._record() has a name to
+    # attribute the SCAFFOLD phase to; it is never sent to the LLM.
     scaffolder = Agent(
         name="Scaffolder",
-        system_prompt=(
-            "You are the Scaffolder. Read the Architect's file manifest and "
-            "language. Use your tools to write the skeleton files to the workspace "
-            "(entry-point stubs, build manifests, test directory, .gitignore, "
-            "README.md). Do not write business logic — only the project structure. "
-            "Confirm each file you create."
-        ),
+        system_prompt="Unused: SCAFFOLD is a deterministic phase, not an LLM call.",
         tier=Tier.CODING,
-        tools=["write_file", "list_dir", "read_file"],
     )
     architect = Agent(
         name="Architect",
