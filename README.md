@@ -45,19 +45,37 @@ run_agent()  ──►  Router.fallback_chain(tier)  ──►  OllamaBackend.ch
 ToolRegistry.dispatch()  (loop until final answer or max_tool_turns)
 
 Swarm.run(goal):
-  PLAN (Planner) ──► ARCHITECT (Architect) ──► IMPLEMENT (Builder) ──► REVIEW (Critic)
-                                                     ▲                      │
-                                                     └── rework, bounded ────┘  (max_rework, default 2)
-                                                                            │ APPROVE
-                                                                            ▼
-                                    IMPLEMENT ◄── NO-GO, bounded ──── GOVERN (Governor)
-                                    (max_governor_rework, default 1)        │ GO (or budget exhausted)
-                                                                            ▼
-                                                              OPERATE (FinOps — always runs)
+  PLAN (Planner) ──► ARCHITECT (Architect) ──► SCAFFOLD (deterministic) ──► IMPLEMENT (Builder)
+                                                                                 │
+                                                                                 ▼
+                                             TEST-GEN (TestGen) ──────────► REVIEW (Critic)
+                                                     ▲                           │
+                                     IMPLEMENT ◄── rework, bounded ──────────────┘  (max_rework, default 2)
+                                                                                 │ APPROVE
+                                                                                 ▼
+                                    IMPLEMENT ◄── NO-GO, one fix pass ── SECURITY (Security)
+                                                                                 │ GO / WARN
+                                                                                 ▼
+                                    IMPLEMENT ◄── NO-GO, bounded ──────── GOVERN (Governor)
+                                    (max_governor_rework, default 1)             │ GO (or budget exhausted)
+                                                                                 ▼
+                                                                   OPERATE (FinOps — always runs)
 ```
 
 - **Architect** inspects the workspace read-only (`list_dir`, `read_file`) and writes a
   short design note the Builder must respect.
+- **SCAFFOLD** is not an LLM call: `scaffold.py` detects the target language from the
+  Architect's notes (python / node / rust / shell, generic fallback) and writes a
+  standard project skeleton into the workspace, so the Builder never starts from an
+  empty directory. It appears in the phase history with `model="scaffold"`.
+- **TestGen** writes tests against the Builder's implementation before the Critic
+  reviews; the generated tests and their tool-execution evidence are folded into the
+  review input.
+- **Security** runs `run_security_scan` (`security_gates.py`), which shells out to a
+  language-appropriate scanner — `bandit` for python, `npm audit` for node,
+  `cargo audit` for rust. A missing scanner is a `SECURITY: WARN`, not a NO-GO. On
+  `SECURITY: NO-GO` the Builder gets exactly one fix pass, then security re-runs once —
+  no loop.
 - **Governor** has exactly one tool, `run_quality_gates`, which actually executes
   `pytest` (and `ruff check` when installed) in the workspace — approval stops being an
   LLM's opinion and becomes a real test run. On NO-GO the work goes back through
@@ -98,7 +116,7 @@ cloud account — not mocked:
 - Chat completion via `kimi-k2.6:cloud` (`ollama.Client(host="http://localhost:11434")`)
 - Native tool-calling (`tools=[...]` → structured `tool_calls` in the response)
 - Embeddings via `nomic-embed-text` (pulled locally, 768-dim vectors)
-- The full six-phase `Swarm` end-to-end with dev tools enabled: the Builder really
+- The full `Swarm` pipeline end-to-end with dev tools enabled: the Builder really
   wrote a file into `./workspace`, executed it with `run_shell`, and git-committed
   it; the Critic approved on tool-execution evidence; the Governor ran real quality
   gates and issued `GOVERN: GO`; FinOps summarized the run's token ledger. Routed
@@ -114,14 +132,55 @@ rejecting work the Builder had genuinely done because it saw only final prose (f
 by feeding tool-execution evidence into the review input), and the original FAST-tier
 models didn't exist. Offline tests can't catch either class of problem.
 
+The `ollama-developer-assistant` CLI was also live-verified end to end (2026-07-07):
+piped-stdin clarification interview → three model-generated questions → synthesized
+goal → all nine phases through OPERATE in under 4 minutes on cloud models, with the
+correct `add.py` written to the workspace, `swarm_memory.db` populated via live
+embeddings, bounded rework loops exercised for real (two Critic REQUEST_CHANGES
+cycles, then APPROVE), and `SECURITY: WARN` on a missing bandit as designed. True to
+form, the live run exposed two more bugs the offline suite can't see — the scaffolder
+names the package after the first word of the goal (synthesized goals start with
+markdown, yielding `__synthesized`), and its placeholder `tests/test_main.py` fails
+the Governor's pytest gate unless the Builder happens to replace it.
+
+## Developer Assistant CLI
+
+`ollama-developer-assistant` (installed by `pip install -e .`) wraps the swarm in an
+interactive flow that refines a rough idea before running the pipeline:
+
+1. You type your initial software idea.
+2. A REASONING-tier model formulates three high-impact clarifying questions, asked
+   one at a time on the terminal.
+3. Your answers are synthesized into a detailed, concrete goal, which is what
+   `Swarm.run()` actually receives.
+
+Passing a goal as positional arguments skips the interview entirely:
+
+```bash
+ollama-developer-assistant                          # interactive clarification flow
+ollama-developer-assistant "build a CLI todo app"   # straight to the pipeline
+ollama-developer-assistant --config my.json         # load connection/model settings
+```
+
+Settings precedence is CLI args > `--config` JSON > environment variables > defaults.
+The JSON config accepts `mode`, `host`, `cloud_host`, `api_key`, `timeout`,
+`max_tool_turns`, `output_dir` (alias `workspace_root`), and `models` — a
+`{tier: [model, ...]}` map that replaces `MODEL_CATALOG` per tier, e.g.
+`{"models": {"coding": ["qwen3-coder-next:cloud"]}}`.
+
+Two defaults differ from the plain `ollama_swarm.cli`: the workspace defaults to
+`~/teamwork_projects/ollama_developer_assistant` (still traversal-confined like every
+workspace), and dev tools are **on** by default — disable with `--no-dev-tools`.
+
 ## Running it
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                       # 16 tests, all offline (scripted fake backend)
+pytest -q                       # 170 tests, all offline (scripted fake backend)
 
 python examples/run_demo.py     # live run against your Ollama daemon
 python -m ollama_swarm.cli "explain X"   # same, your own goal
+ollama-developer-assistant      # interactive assistant (see above)
 ```
 
 Requires a running `ollama serve` (local models work with no signin; `:cloud` models
