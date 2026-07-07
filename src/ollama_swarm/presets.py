@@ -141,8 +141,10 @@ def default_swarm_agents() -> SwarmAgents:
     security = Agent(
         name="Security",
         system_prompt=(
-            "You are the Security Auditor. Call `run_security_scan` on the "
-            "workspace. Trust its output completely. Reply with exactly one of:\n"
+            "You are the Security Auditor. Call `run_security_scan` with no arguments — "
+            "it already knows the workspace path and requires no input from you. Never "
+            "ask a clarifying question or request a path; just call it. Trust its output "
+            "completely. Reply with exactly one of:\n"
             "  SECURITY: GO                  — no issues found\n"
             "  SECURITY: WARN: <details>     — scanner missing or low-severity findings\n"
             "  SECURITY: NO-GO: <finding>    — high/critical severity findings\n"

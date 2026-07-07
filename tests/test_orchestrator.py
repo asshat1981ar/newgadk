@@ -188,6 +188,49 @@ def test_swarm_critic_never_approves_skips_govern_but_operate_still_runs(fake_ba
     assert "OPERATE" in phases
 
 
+def test_swarm_security_no_go_skips_govern_but_operate_still_runs(fake_backend) -> None:
+    def script(messages):
+        role = _role(messages)
+        if role == "security":
+            return {"message": {"content": "SECURITY: NO-GO: eval() on untrusted input"}}
+        if role == "critic":
+            return {"message": {"content": "APPROVE"}}
+        if role == "governor":
+            return {"message": {"content": "GOVERN: GO"}}
+        return {"message": {"content": f"content for {role}"}}
+
+    backend = fake_backend(script)
+    swarm = _make_swarm(backend)
+    result = swarm.run("an insecure goal")
+
+    assert result.approved is True
+    assert result.governed is False
+    phases = [r.phase for r in result.history]
+    assert phases.count("SECURITY") == 2  # one fix-and-rescan attempt, still NO-GO
+    assert "GOVERN" not in phases
+    assert "OPERATE" in phases
+
+
+def test_swarm_security_ambiguous_verdict_fails_closed(fake_backend) -> None:
+    def script(messages):
+        role = _role(messages)
+        if role == "security":
+            return {"message": {"content": "I need to know which workspace to scan."}}
+        if role == "critic":
+            return {"message": {"content": "APPROVE"}}
+        if role == "governor":
+            return {"message": {"content": "GOVERN: GO"}}
+        return {"message": {"content": f"content for {role}"}}
+
+    backend = fake_backend(script)
+    swarm = _make_swarm(backend)
+    result = swarm.run("a goal with a confused security agent")
+
+    assert result.governed is False
+    phases = [r.phase for r in result.history]
+    assert "GOVERN" not in phases
+
+
 def test_swarm_writes_a_run_summary_to_memory(tmp_path, fake_backend) -> None:
     def script(messages):
         role = _role(messages)

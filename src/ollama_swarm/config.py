@@ -25,12 +25,24 @@ class Tier(str, Enum):
 
 
 # name -> (tier, ...fallback tiers if the primary model is unavailable)
+# Probed live 2026-07 against every model ollama.com/search?c=cloud lists: gpt-oss,
+# qwen3-coder (needs a variant tag, unlike qwen3-coder-next), and devstral-2 (previously
+# in this catalog's CODING fallback chain) all 404. ministral-3/nemotron-3-nano/
+# gemini-3-flash also 404'd in an earlier probe. Everything below resolved.
 MODEL_CATALOG: dict[Tier, list[str]] = {
-    Tier.REASONING: ["glm-5:cloud", "deepseek-v4-flash:cloud", "kimi-k2.6:cloud"],
-    Tier.CODING: ["qwen3-coder-next:cloud", "devstral-2:cloud", "kimi-k2.6:cloud"],
-    # Probed live 2026-07: ministral-3/nemotron-3-nano/gemini-3-flash 404 on
-    # Ollama Cloud; qwen3.5 and gemma4 resolve.
-    Tier.FAST: ["qwen3.5:cloud", "gemma4:cloud"],
+    Tier.REASONING: [
+        "glm-5:cloud", "glm-5.2:cloud", "glm-5.1:cloud",
+        "deepseek-v4-flash:cloud", "deepseek-v4-pro:cloud",
+        "kimi-k2.6:cloud", "nemotron-3-ultra:cloud", "nemotron-3-super:cloud",
+    ],
+    Tier.CODING: [
+        "qwen3-coder-next:cloud", "kimi-k2.7-code:cloud",
+        "kimi-k2.6:cloud", "deepseek-v4-pro:cloud",
+    ],
+    Tier.FAST: [
+        "qwen3.5:cloud", "gemma4:cloud", "glm-4.7:cloud",
+        "gemini-3-flash-preview:cloud", "kimi-k2.5:cloud",
+    ],
     Tier.EMBED: ["nomic-embed-text"],
 }
 

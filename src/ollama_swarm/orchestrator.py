@@ -144,8 +144,9 @@ class Swarm:
             return True, True
         if "SECURITY: GO" in upper:
             return True, False
-        # Default to warn if verdict is ambiguous
-        return True, True
+        # Verdict is ambiguous (e.g. the agent asked a question instead of calling the
+        # tool) — fail closed rather than silently letting an unscanned build through.
+        return False, False
 
     def _review_cycle(self, goal: str, build: AgentRunResult, result: SwarmResult) -> tuple[AgentRunResult, bool]:
         """The Critic REVIEW<->IMPLEMENT rework loop, bounded by `max_rework`.
@@ -295,33 +296,37 @@ class Swarm:
                 security_go, _ = self._is_security_go(security_run2.content)
                 result.security_verdict = security_run2.content
 
-            # --- GOVERN ---
+            # --- GOVERN --- (security gates this, same as the Critic gates it above:
+            # a build that never got a clean security verdict doesn't get to Governor.)
             governor_rework_count = 0
-            while True:
-                governor_input = f"Goal: {goal}\n\nSolution:\n{augmented_build.content}"
-                governor = self._run(self.governor, governor_input)
-                self._record(governor, "GOVERN", self.governor, result.history)
+            if not security_go:
+                result.governed = False
+            else:
+                while True:
+                    governor_input = f"Goal: {goal}\n\nSolution:\n{augmented_build.content}"
+                    governor = self._run(self.governor, governor_input)
+                    self._record(governor, "GOVERN", self.governor, result.history)
 
-                if self._is_go(governor.content):
-                    result.governed = True
-                    break
+                    if self._is_go(governor.content):
+                        result.governed = True
+                        break
 
-                governor_rework_count += 1
-                if governor_rework_count > self.max_governor_rework:
-                    break
+                    governor_rework_count += 1
+                    if governor_rework_count > self.max_governor_rework:
+                        break
 
-                rework_input = (
-                    f"Goal: {goal}\n\nPrevious attempt:\n{augmented_build.content}\n\n"
-                    f"Governor feedback:\n{governor.content}\n\nRevise accordingly."
-                )
-                build_revised = self._run(self.builder, rework_input)
-                self._record(build_revised, "IMPLEMENT", self.builder, result.history)
-                augmented_build = dataclasses.replace(build_revised, content=build_revised.content)
+                    rework_input = (
+                        f"Goal: {goal}\n\nPrevious attempt:\n{augmented_build.content}\n\n"
+                        f"Governor feedback:\n{governor.content}\n\nRevise accordingly."
+                    )
+                    build_revised = self._run(self.builder, rework_input)
+                    self._record(build_revised, "IMPLEMENT", self.builder, result.history)
+                    augmented_build = dataclasses.replace(build_revised, content=build_revised.content)
 
-                augmented_build, approved = self._review_cycle(goal, augmented_build, result)
-                result.approved = approved
-                if not approved:
-                    break
+                    augmented_build, approved = self._review_cycle(goal, augmented_build, result)
+                    result.approved = approved
+                    if not approved:
+                        break
 
             result.governor_rework_count = governor_rework_count
 

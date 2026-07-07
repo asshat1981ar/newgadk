@@ -143,6 +143,8 @@ class MockBackendState:
             role = "builder"
         elif "Critic" in system_content:
             role = "critic"
+        elif "Security" in system_content:
+            role = "security"
         elif "Governor" in system_content:
             role = "governor"
         elif "FinOps" in system_content:
@@ -153,6 +155,7 @@ class MockBackendState:
             "architect": "Architecture: Use standard layout.",
             "builder": "Implementation: Done.",
             "critic": "APPROVE",
+            "security": "SECURITY: GO",
             "governor": "GOVERN: GO",
             "finops": "FinOps: Run summary completed.",
         }[role]
@@ -235,16 +238,19 @@ def subprocess_happy_path_chat(model, messages, req):
         role = "builder"
     elif "Critic" in system_prompt:
         role = "critic"
+    elif "Security" in system_prompt:
+        role = "security"
     elif "Governor" in system_prompt:
         role = "governor"
     elif "FinOps" in system_prompt:
         role = "finops"
-        
+
     content = {
         "planner": "Plan: 1. Do subprocess task.",
         "architect": "Architecture: Subprocess architecture.",
         "builder": "Implementation: Subprocess implementation.",
         "critic": "APPROVE",
+        "security": "SECURITY: GO",
         "governor": "GOVERN: GO",
         "finops": "FinOps: Subprocess cost summary.",
     }[role]

@@ -126,6 +126,13 @@ cloud account — not mocked:
 - The catalog itself was probed live: `ministral-3`, `nemotron-3-nano`, and
   `gemini-3-flash` 404 on Ollama Cloud despite appearing in GADK's model list, so
   the FAST tier points at `qwen3.5`/`gemma4`, which resolve.
+- Re-probed live 2026-07-07 against every model `ollama.com/search?c=cloud` lists:
+  `gpt-oss`, `qwen3-coder` (needs a variant tag, unlike `qwen3-coder-next`), and
+  `devstral-2` (previously a CODING-tier fallback here) all 404. The other 19
+  models on that page resolved, so `MODEL_CATALOG` now carries real fallback
+  chains per tier — e.g. REASONING falls through `glm-5` → `glm-5.2` → `glm-5.1` →
+  `deepseek-v4-flash` → `deepseek-v4-pro` → `kimi-k2.6` → `nemotron-3-ultra` →
+  `nemotron-3-super` instead of three entries, one of which was dead.
 
 Two real bugs surfaced only in live runs, not the offline suite: the Critic was
 rejecting work the Builder had genuinely done because it saw only final prose (fixed
